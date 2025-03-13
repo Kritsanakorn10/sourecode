@@ -1,0 +1,88 @@
+clc; clear; close all;
+
+% โหลดข้อมูลจาก Excel
+file_path = 'C:\Users\krits\Desktop\import\weather\100perdata.xlsx';
+data = readtable(file_path);
+
+% ลบคอลัมน์ Date ออก
+data.Date = [];
+
+
+% เพิ่ม Feature Engineering (Lag Features)
+data.Rainfall_Lag1 = [NaN; data.Rainfall(1:end-1)];
+data.Rainfall_Lag2 = [NaN; NaN; data.Rainfall(1:end-2)];
+data.Rainfall_Lag3 = [NaN; NaN; NaN; data.Rainfall(1:end-3)];
+
+% ลบแถวที่มี NaN ออก
+data = rmmissing(data);
+
+% แยกตัวแปรอิสระ (X) และตัวแปรเป้าหมาย (y)
+X = data{:, 1:end-1};  % ตัวแปรอิสระ
+y = data.Rainfall;     % ตัวแปรเป้าหมาย
+
+data.Rainfall = [];
+
+% กำหนดจำนวน Fold
+k = 5; % จำนวนของ K-Fold
+n = size(X,1);
+fold_size = floor(n / k);
+
+% เก็บผลลัพธ์
+metrics_results = zeros(k, 4); % Accuracy, Precision, Recall, F1-Score
+
+for i = 1:k
+    %  แยก Training และ Testing จาก K-Fold ตามลำดับเวลา
+    idx_test = (1 + (i-1) * fold_size) : (i * fold_size);
+    idx_train = setdiff(1:n, idx_test);
+    
+    X_train = X(idx_train, :);
+    y_train = y(idx_train, :);
+    X_test = X(idx_test, :);
+    y_test = y(idx_test, :);
+    
+    %  Standardization ให้ข้อมูล (Min-Max Scaling)
+    [X_train_scaled, ps] = mapminmax(X_train');
+    X_train_scaled = X_train_scaled';
+    X_test_scaled = mapminmax('apply', X_test', ps)';
+    
+    % สร้างโมเดล SVR
+    mdl_svm = fitrsvm(X_train_scaled, y_train, 'KernelFunction', 'linear', ...
+        'BoxConstraint', 2, 'Epsilon', 0.05);
+    
+    %  ทำนายผล
+    y_test_pred = predict(mdl_svm, X_test_scaled);
+    
+    %  ป้องกันค่าพยากรณ์ติดลบ
+    y_test_pred(y_test_pred < 0) = 0;
+    
+
+    % คำนวณค่าความถูกต้อง Accuracy, Precision, Recall, F1-Score
+    threshold = 0.1; % กำหนดค่าฝนต่ำสุดที่ถือว่ามีฝน
+    y_test_bin = y_test > threshold;
+    y_test_pred_bin = y_test_pred > threshold;
+    
+    TP = sum((y_test_bin == 1) & (y_test_pred_bin == 1));
+    FP = sum((y_test_bin == 0) & (y_test_pred_bin == 1));
+    FN = sum((y_test_bin == 1) & (y_test_pred_bin == 0));
+    TN = sum((y_test_bin == 0) & (y_test_pred_bin == 0));
+    
+    Accuracy = (TP + TN) / (TP + TN + FP + FN);
+    Precision = TP / (TP + FP);
+    Recall = TP / (TP + FN);
+    F1_Score = 2 * (Precision * Recall) / (Precision + Recall);
+    
+    %  บันทึกผลลัพธ์
+    metrics_results(i, :) = [Accuracy, Precision, Recall, F1_Score];
+    fprintf('Fold %d - Accuracy: %.4f, Precision: %.4f, Recall: %.4f, F1-Score: %.4f\n', ...
+        i, Accuracy, Precision, Recall, F1_Score);
+end
+
+% คำนวณค่าเฉลี่ยของ Metrics
+mean_metrics = mean(metrics_results, 1);
+
+% แสดงผลลัพธ์รวม
+fprintf('\nK-Fold Cross Validation Results:\n');
+fprintf('Mean Accuracy: %.4f\n', mean_metrics(1));
+fprintf('Mean Precision: %.4f\n', mean_metrics(2));
+fprintf('Mean Recall: %.4f\n', mean_metrics(3));
+fprintf('Mean F1-Score: %.4f\n', mean_metrics(4));

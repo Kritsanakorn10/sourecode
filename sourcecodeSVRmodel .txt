@@ -1,0 +1,92 @@
+clc; clear; close all;
+
+% โหลดข้อมูลจาก Excel
+file_path = 'C:\Users\krits\Desktop\import\weather\100perdata.xlsx';
+data = readtable(file_path);
+
+% ลบคอลัมน์ Date ออก
+data.Date = [];
+
+
+% เพิ่ม Feature Engineering (Lag Features)
+data.Rainfall_Lag1 = [NaN; data.Rainfall(1:end-1)];
+data.Rainfall_Lag2 = [NaN; NaN; data.Rainfall(1:end-2)];
+data.Rainfall_Lag3 = [NaN; NaN; NaN; data.Rainfall(1:end-3)];
+
+
+% แยกตัวแปรอิสระ (X) และตัวแปรเป้าหมาย (y)
+X = data{:, 1:end-1};  % ตัวแปรอิสระ
+y = data.Rainfall;     % ตัวแปรเป้าหมาย
+data.Rainfall = [];
+
+% แบ่งข้อมูลเป็น Training (80%) และ Testing (20%) 
+n = size(X,1);
+train_size = round(0.8 * n);
+X_train = X(1:train_size, :);
+y_train = y(1:train_size, :);
+X_test = X(train_size+1:end, :);
+y_test = y(train_size+1:end, :);
+
+%  Standardization ให้ข้อมูล ( Min-Max Scaling )
+[X_train_scaled, ps] = mapminmax(X_train');
+X_train_scaled = X_train_scaled';
+X_test_scaled = mapminmax('apply', X_test', ps)';
+    
+% สร้างโมเดล SVR Regression 
+mdl_svr = fitrsvm(X_train_scaled, y_train, 'KernelFunction', 'linear', ...
+                                           'BoxConstraint', 2, ...
+                                           'Epsilon', 0.05);
+
+% ทำนายผลใหม่
+y_train_pred = predict(mdl_svr, X_train_scaled);
+y_test_pred = predict(mdl_svr, X_test_scaled);
+
+% ป้องกันค่าพยากรณ์ติดลบ (Clip Min Value = 0)
+y_train_pred(y_train_pred < 0) = 0;
+y_test_pred(y_test_pred < 0) = 0;
+
+
+% คำนวณค่าประเมินผลโมเดล
+metrics = @(y_true, y_pred) struct( ...
+    'MAE', mean(abs(y_pred - y_true)), ...
+    'MSE', mean((y_pred - y_true).^2), ...
+    'RMSE', sqrt(mean((y_pred - y_true).^2)), ...
+    'R2', 1 - sum((y_true - y_pred).^2) / sum((y_true - mean(y_true)).^2));
+
+results_train = metrics(y_train, y_train_pred);
+results_test = metrics(y_test, y_test_pred);
+
+% แสดงผลค่าประเมิน
+fprintf('\nPerformance :\n');
+fprintf('Train Set - MAE: %.4f, MSE: %.4f, RMSE: %.4f, R²: %.4f\n', ...
+    results_train.MAE, results_train.MSE, results_train.RMSE, results_train.R2);
+fprintf('Test Set  - MAE: %.4f, MSE: %.4f, RMSE: %.4f, R²: %.4f\n', ...
+    results_test.MAE, results_test.MSE, results_test.RMSE, results_test.R2);
+
+% กราฟเปรียบเทียบผลลัพธ์ (Train vs Test)
+figure;
+subplot(2,1,1);
+plot(y_train, 'b', 'LineWidth', 1.5); hold on;
+plot(y_train_pred, 'r--', 'LineWidth', 1.5);
+legend('Actual Train', 'Predicted Train');
+xlabel('Index'); ylabel('Rainfall (mm)');
+title('Training Set: Actual vs Predicted (SVR)');
+grid on;
+
+subplot(2,1,2);
+plot(y_test, 'b', 'LineWidth', 1.5); hold on;
+plot(y_test_pred, 'r--', 'LineWidth', 1.5);
+legend('Actual Test', 'Predicted Test');
+xlabel('Index'); ylabel('Rainfall (mm)');
+title('Testing Set: Actual vs Predicted (SVR)');
+grid on;
+sgtitle('SVR');
+
+% บันทึกผลลัพธ์ลง Excel
+train_results = table(y_train, y_train_pred, 'VariableNames', {'Actual_Rainfall', 'Predicted_Rainfall'});
+test_results = table(y_test, y_test_pred, 'VariableNames', {'Actual_Rainfall', 'Predicted_Rainfall'});
+
+output_file = 'C:\Users\krits\Desktop\import\weather\SVR_Optimized_Predictions.xlsx';
+writetable(train_results, output_file, 'Sheet', 'Train_Predictions');
+writetable(test_results, output_file, 'Sheet', 'Test_Predictions');
+

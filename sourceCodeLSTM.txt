@@ -1,0 +1,118 @@
+clc; clear; close all;
+
+% โหลดข้อมูลจากไฟล์ Excel
+filename = '100perdata.xlsx';
+data = readtable(filename);
+
+% สร้าง Lag Features และ Moving Average Features
+data.Rainfall_Lag1 = [NaN; data.Rainfall(1:end-1)];
+data.Rainfall_Lag2 = [NaN; NaN; data.Rainfall(1:end-2)];
+data.Rainfall_Lag3 = [NaN; NaN; NaN; data.Rainfall(1:end-3)];
+
+data.Rainfall_MA3 = movmean(data.Rainfall, [2 0], 'omitnan');
+data.Rainfall_MA5 = movmean(data.Rainfall, [4 0], 'omitnan');
+data.Rainfall_MA7 = movmean(data.Rainfall, [6 0], 'omitnan');
+
+% ลบแถวที่มีค่า NaN
+data = rmmissing(data);
+
+% แยก Features และ Target (ไม่ใช้ Rainfall เป็น Feature)
+feature_cols = {'MaxAirPressure', 'MinAirPressure', 'MaxTemp', 'MinTemp', ...
+                'MaxHumidity', 'MinHumidity', 'Evaporation', 'WindSpeed', ...
+                'Rainfall_Lag1', 'Rainfall_Lag2', 'Rainfall_Lag3', ...
+                'Rainfall_MA3', 'Rainfall_MA5', 'Rainfall_MA7'};
+
+X = data{:, feature_cols}; % Features
+y = data.Rainfall;         % Target
+
+% ทำ Normalization (Min-Max Scaling)
+X_min = min(X);
+X_max = max(X);
+X_scaled = (X - X_min) ./ (X_max - X_min);
+
+y_min = min(y);
+y_max = max(y);
+y_scaled = (y - y_min) ./ (y_max - y_min);
+
+% แบ่งข้อมูลเป็น Train (80%) และ Test (20%) 
+train_size = round(0.8 * size(X_scaled, 1));
+X_train = X_scaled(1:train_size, :);
+X_test = X_scaled(train_size+1:end, :);
+y_train = y_scaled(1:train_size, :);
+y_test = y_scaled(train_size+1:end, :);
+
+% แปลง X ให้เป็น cell array (ใช้กับ LSTM)
+X_train = arrayfun(@(i) X_train(i, :)', 1:size(X_train, 1), 'UniformOutput', false);
+X_test = arrayfun(@(i) X_test(i, :)', 1:size(X_test, 1), 'UniformOutput', false);
+
+% ตรวจสอบและลบค่า NaN จาก y_train, y_test
+y_train = y_train(~isnan(y_train));
+y_test = y_test(~isnan(y_test));
+
+% แก้ไขการเรียกใช้ numFeatures
+numFeatures = size(X_train{1}, 1);
+numHiddenUnits = 100;
+numResponses = 1;
+
+% สร้างโครงข่าย LSTM
+layers = [ ...
+    sequenceInputLayer(numFeatures)
+    lstmLayer(numHiddenUnits, 'OutputMode', 'last')
+    dropoutLayer(0.2)
+    fullyConnectedLayer(numResponses)
+    reluLayer %  เพื่อป้องกันค่าติดลบ
+    regressionLayer];
+
+options = trainingOptions('adam', ...
+    'MaxEpochs', 50, ...
+    'MiniBatchSize', 64, ...
+    'Shuffle', 'never', ...
+    'Verbose', 0);
+
+% ฝึกโมเดล LSTM (แก้ไข `y_train` เป็น vector)
+net = trainNetwork(X_train, y_train, layers, options);
+
+%% ทำนายผล
+y_train_pred = predict(net, X_train);
+y_test_pred = predict(net, X_test);
+
+% แปลงค่ากลับเป็นค่าจริง
+y_train_pred = y_train_pred * (y_max - y_min) + y_min;
+y_test_pred = y_test_pred * (y_max - y_min) + y_min;
+y_train = y_train * (y_max - y_min) + y_min;
+y_test = y_test * (y_max - y_min) + y_min;
+
+% คำนวณค่าความคลาดเคลื่อน MAE, MSE, RMSE, R² ของ Train และ Test
+MAE_train = mean(abs(y_train - y_train_pred));
+MSE_train = mean((y_train - y_train_pred).^2);
+RMSE_train = sqrt(MSE_train);
+R2_train = 1 - sum((y_train - y_train_pred).^2) / sum((y_train - mean(y_train)).^2);
+
+MAE_test = mean(abs(y_test - y_test_pred));
+MSE_test = mean((y_test - y_test_pred).^2);
+RMSE_test = sqrt(MSE_test);
+R2_test = 1 - sum((y_test - y_test_pred).^2) / sum((y_test - mean(y_test)).^2);
+
+fprintf('Training Set- MAE: %.4f MSE: %.4f RMSE: %.4f R²: %.4f\n', MAE_train, MSE_train, RMSE_train, R2_train);
+fprintf('Testing Set- MAE: %.4f MSE: %.4f RMSE: %.4f R²: %.4f\n', MAE_test, MSE_test, RMSE_test, R2_test);
+
+% แสดงกราฟ Actual vs Predicted ของ Train และ Test ในหน้าต่างเดียวกัน
+figure;
+subplot(2,1,1);
+plot(y_train, 'g', 'LineWidth', 1.5); hold on;
+plot(y_train_pred, 'r--', 'LineWidth', 1.5);
+xlabel('Time Step');
+ylabel('Rainfall (mm)');
+legend('Actual', 'Predicted');
+title('Train Set: Actual vs Predicted Rainfall');
+grid on;
+
+subplot(2,1,2);
+plot(y_test, 'g', 'LineWidth', 1.5); hold on;
+plot(y_test_pred, 'r--', 'LineWidth', 1.5);
+xlabel('Time Step');
+ylabel('Rainfall (mm)');
+legend('Actual', 'Predicted');
+title('Test Set: Actual vs Predicted Rainfall');
+grid on;
+sgtitle('LSTM');
