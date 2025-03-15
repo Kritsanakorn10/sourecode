@@ -34,10 +34,10 @@ y_min = min(y);
 y_max = max(y);
 y_scaled = (y - y_min) ./ (y_max - y_min);
 
-%% ตั้งค่า K-Fold
+%% ตั้งค่า K-Fold Time Series
 K = 5;
 n = size(X_scaled,1);
-indices = crossvalind('Kfold', n, K);
+fold_size = floor(n / K);
 
 accuracy_scores = zeros(K,1);
 precision_scores = zeros(K,1);
@@ -47,15 +47,28 @@ f1_scores = zeros(K,1);
 for k = 1:K
     fprintf('Fold %d:', k);
 
-    % แบ่งข้อมูลตาม K-Fold
-    test_idx = (indices == k);
-    train_idx = ~test_idx;
+    % แบ่งข้อมูลตามลำดับเวลา
+    test_idx = (1 + (k-1) * fold_size) : (k * fold_size);
+    
+    % ป้องกันไม่ให้ Test Set เกินขนาดของข้อมูล
+    if max(test_idx) > n
+        test_idx = test_idx(1):n;
+    end
+    
+    % ปรับ Train-Set ให้ไม่ว่าง
+    if k == 1
+        train_idx = 1:fold_size; % ให้ Fold 1 มีข้อมูลเทรน
+    else
+        train_idx = 1 : ((k-1) * fold_size); % ใช้ข้อมูลก่อนหน้าเสมอ
+    end
 
+    % แยกข้อมูล Training และ Testing
     X_train = X_scaled(train_idx, :);
     y_train = y_scaled(train_idx);
     X_test = X_scaled(test_idx, :);
     y_test = y_scaled(test_idx);
 
+    % แปลงข้อมูลให้ LSTM ใช้ได้
     X_train = arrayfun(@(i) X_train(i, :)', 1:size(X_train,1), 'UniformOutput', false);
     X_test = arrayfun(@(i) X_test(i, :)', 1:size(X_test,1), 'UniformOutput', false);
 
@@ -74,6 +87,7 @@ for k = 1:K
         'Shuffle', 'never', ...
         'Verbose', 0);
 
+    % เทรนโมเดล LSTM
     net = trainNetwork(X_train, y_train, layers, options);
 
     % ทำนายผล
